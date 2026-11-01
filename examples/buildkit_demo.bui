@@ -1,0 +1,14 @@
+Import buildkit
+
+Sub Main()
+    Dim decoder As New BuildLogDecoder()
+    Dim output As Bytes = Bytes.FromString("src/main.bui:12:4: error: expected expression\nBuild stopped.\n", Text.Encodings.UTF8)
+    For Each line As String In decoder.Feed(output)
+        Dim diagnostic As BuildDiagnostic = ParseBuildLine(line)
+        If diagnostic <> Nil Then
+            Print diagnostic.FileName + ":" + String.From(diagnostic.Line) + ": " + diagnostic.Message
+        Else
+            Print line
+        End If
+    Next
+End Sub

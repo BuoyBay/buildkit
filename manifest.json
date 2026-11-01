@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "name": "buildkit",
+  "version": "0.1.0",
+  "description": "Typed compiler diagnostics and bounded streaming build-log decoding for developer tools"
+}

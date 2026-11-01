@@ -1,0 +1,290 @@
+Public Enum BuildSeverity As Integer
+    Error = 1
+    Warning = 2
+    Note = 3
+End Enum
+
+''' Compiler coordinates are preserved exactly; absent locations/columns use zero.
+Public Class BuildDiagnostic
+    Public Property FileName As String
+    Public Property Line As Integer
+    Public Property Character As Integer
+    Public Property Severity As BuildSeverity
+    Public Property Message As String
+    Public Property Code As String
+    Public Property RawText As String
+
+    Public Sub Constructor(fileName As String, lineNumber As Integer, columnNumber As Integer, severity As BuildSeverity, message As String, code As String = "", rawText As String = "")
+        Me.FileName = fileName
+        Me.Line = lineNumber
+        Me.Character = columnNumber
+        Me.Severity = severity
+        Me.Message = message
+        Me.Code = code
+        Me.RawText = rawText
+    End Sub
+End Class
+
+Private Function RequiredText(item As JSONItem, key As String) As String
+    Dim field As JSONItem = item.Value(key)
+    If Not field.IsString() Then Throw New InvalidArgumentException("Diagnostic requires a string " + key)
+    Return field.AsString().Value
+End Function
+
+Private Function RequiredCoordinate(item As JSONItem, key As String) As Integer
+    Dim field As JSONItem = item.Value(key)
+    If Not field.IsNumber() Then Throw New InvalidArgumentException("Diagnostic requires a numeric " + key)
+    Dim coordinate As Double = field.AsNumber().Value
+    If coordinate < 0.0 Or coordinate > 2147483647.0 Then Throw New InvalidArgumentException("Diagnostic coordinate is out of range")
+    Dim integral As Integer = coordinate
+    If integral <> coordinate Then Throw New InvalidArgumentException("Diagnostic coordinate must be integral")
+    Return integral
+End Function
+
+Private Sub RequireSafeDiagnosticJSON(source As String)
+    Dim data As Bytes = Bytes.FromString(source, Text.Encodings.UTF8)
+    If data.Count > 16777216 Then Throw New InvalidArgumentException("Diagnostic JSON exceeds byte limit")
+    Dim insideString As Boolean = False
+    Dim depth As Integer = 0
+    Dim i As Integer = 0
+    While i < data.Count
+        Dim octet As Integer = data.Item(i)
+        If octet = 0 Then Throw New InvalidArgumentException("NUL in diagnostic JSON")
+        If insideString Then
+            If octet = 92 Then
+                If i + 5 < data.Count Then
+                    If data.Item(i + 1) = 117 And data.Item(i + 2) = 48 And data.Item(i + 3) = 48 And data.Item(i + 4) = 48 And data.Item(i + 5) = 48 Then Throw New InvalidArgumentException("NUL escape in diagnostic JSON")
+                End If
+                i += 1
+            ElseIf octet = 34 Then
+                insideString = False
+            End If
+        ElseIf octet = 34 Then
+            insideString = True
+        ElseIf octet = 91 Or octet = 123 Then
+            depth += 1
+            If depth > 128 Then Throw New InvalidArgumentException("Diagnostic JSON exceeds nesting limit")
+        ElseIf octet = 93 Or octet = 125 Then
+            depth -= 1
+        End If
+        i += 1
+    End While
+End Sub
+
+''' Parse the compiler's complete JSON object. Malformed schemas throw; no entries are silently lost.
+Public Function ParseBuoyDiagnostics(source As String) As Array Of BuildDiagnostic
+    RequireSafeDiagnosticJSON(source)
+    Dim document As JSONItem = Json.Parse(source)
+    If Not document.IsObject() Then Throw New InvalidArgumentException("Buoy diagnostics must be an object")
+    Dim output(0) As BuildDiagnostic
+    For Each groupName As String In ["errors", "warnings"]
+        Dim group As JSONItem = document.Value(groupName)
+        If Not group.IsArray() Then Throw New InvalidArgumentException("Buoy diagnostics requires arrays errors and warnings")
+        Dim severity As BuildSeverity = BuildSeverity.Error
+        If groupName = "warnings" Then severity = BuildSeverity.Warning
+        For i As Integer = 0 To group.Count() - 1
+            Dim entry As JSONItem = group.ValueAt(i)
+            If Not entry.IsObject() Then Throw New InvalidArgumentException("Diagnostic entry must be an object")
+            Dim code As String = ""
+            If entry.HasKey("code") Then code = RequiredText(entry, "code")
+            Array.Append(output, New BuildDiagnostic(RequiredText(entry, "file"), RequiredCoordinate(entry, "line"), RequiredCoordinate(entry, "character"), severity, RequiredText(entry, "message"), code, Json.Stringify(entry)))
+        Next
+    Next
+    Return output
+End Function
+
+''' Strip ANSI CSI sequences, including SGR colors. Other escape families remain untouched.
+Public Function StripAnsiCSI(source As String) As String
+    If String.IndexOf(source, String.Chr(27), 0, True) < 0 Then Return source
+    Dim characters As Array Of String = String.Chars(source)
+    Dim output As String = ""
+    Dim i As Integer = 0
+    While i < Array.Count(characters)
+        If String.Asc(characters(i)) = 27 And i + 1 < Array.Count(characters) Then
+            If characters(i + 1) = "[" Then
+                i += 2
+                While i < Array.Count(characters)
+                    Dim scalar As Integer = String.Asc(characters(i))
+                    i += 1
+                    If scalar >= 64 And scalar <= 126 Then Exit While
+                End While
+                Continue While
+            End If
+        End If
+        output += characters(i)
+        i += 1
+    End While
+    Return output
+End Function
+
+Private Function DecimalCoordinate(source As String) As Integer
+    If source = "" Then Return -1
+    Dim value As Integer = 0
+    For Each character As String In String.Chars(source)
+        Dim scalar As Integer = String.Asc(character)
+        If scalar < 48 Or scalar > 57 Then Return -1
+        If value > 214748364 Then Return -1
+        value = value * 10 + scalar - 48
+        If value > 2147483647 Then Return -1
+    Next
+    Return value
+End Function
+
+Private Function SeverityFromText(source As String) As BuildSeverity
+    If source = "warning" Then Return BuildSeverity.Warning
+    If source = "note" Then Return BuildSeverity.Note
+    Return BuildSeverity.Error
+End Function
+
+Private Function ParseColonLocation(location As String, severity As BuildSeverity, message As String, rawText As String) As BuildDiagnostic
+    Dim finalColon As Integer = String.LastIndexOf(location, ":", True)
+    If finalColon < 1 Then Return Nil
+    Dim lastNumber As Integer = DecimalCoordinate(String.Substring(location, finalColon + 1))
+    If lastNumber < 0 Then Return Nil
+    Dim fileName As String = String.Left(location, finalColon)
+    Dim lineNumber As Integer = lastNumber
+    Dim columnNumber As Integer = 0
+    Dim priorColon As Integer = String.LastIndexOf(fileName, ":", True)
+    If priorColon > 0 Then
+        Dim priorNumber As Integer = DecimalCoordinate(String.Substring(fileName, priorColon + 1))
+        If priorNumber >= 0 Then
+            lineNumber = priorNumber
+            columnNumber = lastNumber
+            fileName = String.Left(fileName, priorColon)
+        End If
+    End If
+    If fileName = "" Then Return Nil
+    Return New BuildDiagnostic(fileName, lineNumber, columnNumber, severity, message, "", rawText)
+End Function
+
+Private Function ParseMsvcAt(source As String, rawText As String, boundary As Integer) As BuildDiagnostic
+    If boundary < 0 Then Return Nil
+    Dim location As String = String.Left(source, boundary)
+    Dim opening As Integer = String.LastIndexOf(location, "(", True)
+    If opening < 1 Then Return Nil
+    Dim coordinates As Array Of String = String.Split(String.Substring(location, opening + 1), ",")
+    If Array.Count(coordinates) < 1 Or Array.Count(coordinates) > 2 Then Return Nil
+    Dim lineNumber As Integer = DecimalCoordinate(String.Trim(coordinates(0)))
+    Dim columnNumber As Integer = 0
+    If Array.Count(coordinates) = 2 Then columnNumber = DecimalCoordinate(String.Trim(coordinates(1)))
+    If lineNumber < 0 Or columnNumber < 0 Then Return Nil
+    Dim tail As String = String.LTrim(String.Substring(source, boundary + 2))
+    Dim severityText As String = ""
+    For Each candidate As String In ["fatal error", "error", "warning", "note"]
+        If String.StartsWith(tail, candidate + " ", True) Or String.StartsWith(tail, candidate + ":", True) Then
+            severityText = candidate
+            Exit For
+        End If
+    Next
+    If severityText = "" Then Return Nil
+    Dim remainder As String = String.Substring(tail, String.Len(severityText))
+    Dim colon As Integer = String.IndexOf(remainder, ":", 0, True)
+    If colon < 0 Then Return Nil
+    Dim code As String = String.Trim(String.Left(remainder, colon))
+    Dim message As String = String.LTrim(String.Substring(remainder, colon + 1))
+    Return New BuildDiagnostic(String.Left(location, opening), lineNumber, columnNumber, SeverityFromText(severityText), message, code, rawText)
+End Function
+
+Private Function ParseMsvcLine(source As String, rawText As String) As BuildDiagnostic
+    Dim boundary As Integer = String.IndexOf(source, "):", 0, True)
+    While boundary >= 0
+        Dim diagnostic As BuildDiagnostic = ParseMsvcAt(source, rawText, boundary)
+        If diagnostic <> Nil Then Return diagnostic
+        boundary = String.IndexOf(source, "):", boundary + 2, True)
+    End While
+    Return Nil
+End Function
+
+''' Recognize common GCC/Clang/MSVC location lines. Unrecognized text returns Nil.
+Public Function ParseBuildLine(source As String) As BuildDiagnostic
+    Dim clean As String = StripAnsiCSI(source)
+    Dim msvc As BuildDiagnostic = ParseMsvcLine(clean, source)
+    Dim selected As Integer = -1
+    Dim parsedDiagnostic As BuildDiagnostic = Nil
+    For Each severityText As String In ["fatal error", "error", "warning", "note"]
+        Dim delimiter As String = ": " + severityText + ":"
+        Dim offset As Integer = String.IndexOf(clean, delimiter, 0, True)
+        While offset >= 0 And (selected < 0 Or offset < selected)
+            Dim startMessage As Integer = offset + String.Len(severityText) + 3
+            Dim candidate As BuildDiagnostic = ParseColonLocation(String.Left(clean, offset), SeverityFromText(severityText), String.LTrim(String.Substring(clean, startMessage)), source)
+            If candidate <> Nil Then
+                selected = offset
+                parsedDiagnostic = candidate
+                Exit While
+            End If
+            offset = String.IndexOf(clean, delimiter, offset + 1, True)
+        End While
+    Next
+    ' A diagnostic-shaped fragment in the message belongs to the outer location.
+    If parsedDiagnostic = Nil Then Return msvc
+    If msvc <> Nil Then
+        If String.Len(msvc.FileName) < selected Then Return msvc
+    End If
+    Return parsedDiagnostic
+End Function
+
+''' Feed raw bytes from a process stream; each returned string is one complete, color-stripped line.
+Public Class BuildLogDecoder
+    Private Property Pending As Bytes = New Bytes()
+    Private Property SkipLF As Boolean = False
+    Private Property Failed As Boolean = False
+    Private Property Limit As Integer
+
+    Public Sub Constructor(maxLineBytes As Integer = 1048576)
+        If maxLineBytes < 1 Then Throw New InvalidArgumentException("Line byte limit must be positive")
+        Me.Limit = maxLineBytes
+    End Sub
+
+    Public Sub Reset()
+        Me.Pending = New Bytes()
+        Me.SkipLF = False
+        Me.Failed = False
+    End Sub
+
+    Private Function TakeLine() As String
+        Dim decoded As String = Me.Pending.ToString(Text.Encodings.UTF8)
+        Me.Pending = New Bytes()
+        Return StripAnsiCSI(decoded)
+    End Function
+
+    Public Function Feed(chunk As Bytes) As Array Of String
+        If Me.Failed Then Throw New InvalidArgumentException("Decoder failed; call Reset before reuse")
+        If chunk = Nil Then Throw New InvalidArgumentException("Chunk is required")
+        Dim output(0) As String
+        Try
+            For i As Integer = 0 To chunk.Count - 1
+                Dim octet As Integer = chunk.Item(i)
+                If octet = 0 Then Throw New InvalidArgumentException("NUL byte in build log")
+                If Me.SkipLF Then
+                    Me.SkipLF = False
+                    If octet = 10 Then Continue For
+                End If
+                If octet = 10 Or octet = 13 Then
+                    Array.Append(output, Me.TakeLine())
+                    Me.SkipLF = octet = 13
+                Else
+                    If Me.Pending.Count >= Me.Limit Then Throw New InvalidArgumentException("Build log line exceeds byte limit")
+                    Me.Pending.Append(octet)
+                End If
+            Next
+        Catch e As Exception
+            Me.Failed = True
+            Throw e
+        End Try
+        Return output
+    End Function
+
+    ''' Emit a trailing unterminated line; empty trailing buffers emit no line.
+    Public Function Finish() As Array Of String
+        If Me.Failed Then Throw New InvalidArgumentException("Decoder failed; call Reset before reuse")
+        Dim output(0) As String
+        Try
+            If Me.Pending.Count > 0 Then Array.Append(output, Me.TakeLine())
+            Me.SkipLF = False
+        Catch e As Exception
+            Me.Failed = True
+            Throw e
+        End Try
+        Return output
+    End Function
+End Class
