@@ -2,5 +2,5 @@
   "schema": 1,
   "name": "buildkit",
   "version": "0.1.0",
-  "description": "Decode compiler diagnostics and streaming build logs"
+  "description": "Compiler diagnostics and streaming build-log decoder"
 }

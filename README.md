@@ -1,4 +1,4 @@
-# Decode compiler diagnostics and streaming build logs
+# Compiler diagnostics and streaming build-log decoder
 
 Build output support for IDEs: typed Problems-panel diagnostics, common
 compiler location parsing, and bounded byte-stream log decoding. No native
