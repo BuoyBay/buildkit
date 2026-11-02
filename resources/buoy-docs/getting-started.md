@@ -15,7 +15,7 @@ Copy `buildkit-0.1.0.buipkg` into your project's `packages/` directory and impor
 
 This example models one chunk from an existing process pipe. It sends ordinary output to the transcript and recognized locations to the Problems panel. Always call `Finish()` at EOF so an unterminated last line is retained.
 
-```buoy
+```basic
 Import buildkit
 
 Private Sub DisplayLine(line As String)

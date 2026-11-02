@@ -61,8 +61,6 @@ Compiler coordinates are preserved exactly; absent locations/columns use zero.
 
 Returns: no value.
 
-## BuildKit functions
-
 ### ParseBuoyDiagnostics
 
 `Public Function ParseBuoyDiagnostics(source As String) As Array Of BuildDiagnostic`

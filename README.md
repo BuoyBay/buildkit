@@ -1,8 +1,8 @@
 # Decode compiler diagnostics and streaming build logs
 
-Build output support for Buoy IDEs: typed Problems-panel diagnostics, common
-compiler location parsing, and bounded byte-stream log decoding. Pure Buoy,
-without native dependencies or shell execution.
+Build output support for IDEs: typed Problems-panel diagnostics, common
+compiler location parsing, and bounded byte-stream log decoding. No native
+dependencies or shell execution.
 
 Copy `buildkit-0.1.0.buipkg` into a project's `packages/`, then `Import buildkit`.
 See [the console example](examples/buildkit_demo.bui).
@@ -20,7 +20,7 @@ consumer project for reproducible installs.
 
 ## Example
 
-```buoy
+```basic
 Import buildkit
 
 Private Sub DisplayLine(line As String)
@@ -64,7 +64,6 @@ On your own machine, install Buoy and run:
 buoy ai init --both
 ```
 
-The generated agent files and editor settings stay local and are ignored by Git.
 
 ## Contributing
 

@@ -37,5 +37,4 @@ Text parsing recognizes `file:line[:column]: severity: message` and `file(line[,
 
 [Getting started](getting-started.md) · [Package overview](index.md)
 
-
 [Full typed API: properties, parameters, defaults, and returns](typed-api.md)

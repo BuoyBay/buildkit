@@ -58,9 +58,3 @@ drops an incomplete trailing CSI sequence; unsupported escape families remain
 in the text. BuildLogDecoder treats lone CR as a line ending, rather than an
 in-place progress-line update. No process launch, transport, compiler invocation,
 path resolution or editor navigation occurs implicitly.
-
-## Verification
-
-
-Maintainers run the private validation suite before release. See the repository README for public build instructions.
-
